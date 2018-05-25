@@ -1,0 +1,294 @@
+//System Name: MK Stats to InfluxDB
+//Programmer: Martin Kupferman
+
+//Compiler Directives
+#SYMBOL_NAME "Stats to InfluxDB v2"
+#DEFAULT_VOLATILE
+#ENABLE_STACK_CHECKING
+#PRINT_TO_TRACE
+#ENABLE_TRACE
+#DEFINE_CONSTANT Debug 1
+#USER_LIBRARY "TCPStatus"
+
+#DEFINE_CONSTANT DataSize 1024
+#DEFINE_CONSTANT DataSizeServer 600
+
+//#CATEGORY "28"
+
+#HELP_BEGIN
+
+#HELP_END
+
+//Inputs and Outputs
+
+DIGITAL_INPUT AnalogPushDataManual, AnalogPushDataOnChange, AnalogPushDataTimer;
+ANALOG_INPUT AnalogDataTimerValue, _SKIP_;
+DIGITAL_INPUT _SKIP_,_SKIP_,_SKIP_,_SKIP_,_SKIP_,_SKIP_;
+DIGITAL_INPUT DigitalStat[10];
+STRING_INPUT DigitalStatName[10][25];
+STRING_INPUT SerialStat[10][100],SerialStatName[10][25];
+ANALOG_INPUT AnalogStat[10];
+STRING_INPUT AnalogStatName[10][25];
+
+STRING_PARAMETER ServerName[100], ServerPort[10], DBName[25], DBUser[25], DBPass[25], DeviceHostname[25];
+
+STRING Data$[DataSize];
+STRING ServerData$[DataSize];
+STRING ServerBusyData[50][DataSize];
+INTEGER ServerDataLength,ServerBusy, ServerBusyNum;
+
+//Ethernet clients
+
+TCP_CLIENT tcpClient[DataSizeServer];
+
+
+//Events
+
+Function sendStats(STRING Data$)
+{
+INTEGER ServerPortInt;
+SIGNED_INTEGER ServerStatus;
+
+ServerPortInt = ATOI(ServerPort);
+
+if(Debug)
+	TRACE("Data: %s", Data$);
+
+if(ServerBusy = 1)
+	{
+  	ServerBusyNum = ServerBusyNum + 1;
+	ServerBusyData[ServerBusyNum] = Data$;
+	if(Debug)
+		TRACE("ServerBusy True");
+	}
+
+if(ServerBusy = 0)
+{
+	ServerBusy = 1;
+	ServerData$ = Data$;
+	if(Debug)
+		TRACE("ServerBusy 0");
+
+	ServerStatus = socketConnectClient(tcpClient, ServerName, ServerPortInt, 0);
+
+	if(Debug)
+		TRACE("Server Status: %d", ServerStatus);
+}
+
+if(Debug)
+	TRACE("Server Data: %s", ServerData$);
+}
+
+Function SendAnalogData(){
+		INTEGER i;
+
+		STRING Data$[DataSize], AnalogStatNameMod[50], AnalogData$[DataSize];
+	  INTEGER AnalogStatNumber, AnalogStatNameSpace, AnalogStatNameLength;
+
+		for (i = 0 to 10){
+        if(AnalogStatName[i] != "0d"){
+				AnalogStatNumber = i;
+				AnalogStatNameMod = AnalogStatName[AnalogStatNumber];
+				AnalogStatNameSpace = FIND("\x20", AnalogStatNameMod);
+
+				WHILE(AnalogStatNameSpace > 0)
+				{
+			 		AnalogStatNameLength = LEN(AnalogStatNameMod);
+			 		AnalogStatNameMod = LEFT(AnalogStatNameMod,AnalogStatNameSpace-1) + "-" + RIGHT(AnalogStatNameMod,AnalogStatNameLength-AnalogStatNameSpace);
+			 		if(Debug)
+							TRACE("Analog Data Name Loop: %s", AnalogStatNameMod);
+			 		AnalogStatNameSpace = FIND("\x20", AnalogStatNameMod);
+				}
+				MakeString(AnalogData$, "crestron_data,host=%s,name=%s value=%u",DeviceHostname,AnalogStatNameMod, AnalogStat[AnalogStatNumber]);
+				if(Debug)
+				 		TRACE("Analog Data: %s", AnalogData$);
+				Data$ = Data$ + AnalogData$ + "\n";
+				}
+		}
+		sendStats(Data$);
+
+}
+
+PUSH AnalogPushDataManual{
+  SendAnalogData();
+}
+
+PUSH AnalogPushDataTimer{
+  INTEGER AnalogDataTimer;
+  //change seconds to milliseconds, multiply by 100
+  AnalogDataTimer = AnalogDataTimerValue * 100;
+
+  while(AnalogPushDataTimer){
+    wait(AnalogDataTimer){
+      SendAnalogData();
+    }
+  }
+}
+
+
+PUSH DigitalStat{
+
+	STRING Data$[DataSize], DigitalStatNameMod[50];
+  	INTEGER DigitalStatNumber, DigitalStatNameSpace, DigitalStatNameLength;
+	// get which array index was modified
+	DigitalStatNumber = (GetLastModifiedArrayIndex());
+	DigitalStatNameMod = DigitalStatName[DigitalStatNumber];
+  DigitalStatNameSpace = FIND("\x20", DigitalStatNameMod);
+
+    WHILE(DigitalStatNameSpace > 0)
+	{
+	DigitalStatNameLength = LEN(DigitalStatNameMod);
+    DigitalStatNameMod = LEFT(DigitalStatNameMod,DigitalStatNameSpace-1) + "-" + RIGHT(DigitalStatNameMod,DigitalStatNameLength-DigitalStatNameSpace);
+	if(Debug)
+		TRACE("Digital Data Name Loop: %s", DigitalStatNameMod);
+	DigitalStatNameSpace = FIND("\x20", DigitalStatNameMod);
+	}
+	MakeString(Data$, "crestron_data,host=%s,name=%s value=1", DeviceHostname, DigitalStatNameMod);
+
+	if(Debug)
+		TRACE("Digital Data: %s", Data$);
+
+	sendStats(Data$);
+}
+
+RELEASE DigitalStat{
+
+	STRING Data$[DataSize], DigitalStatNameMod[50];
+  	INTEGER DigitalStatNumber, DigitalStatNameSpace, DigitalStatNameLength;
+	// get which array index was modified
+	DigitalStatNumber = (GetLastModifiedArrayIndex());
+	DigitalStatNameMod = DigitalStatName[DigitalStatNumber];
+   	DigitalStatNameSpace = FIND("\x20", DigitalStatNameMod);
+
+    WHILE(DigitalStatNameSpace > 0)
+	{
+	DigitalStatNameLength = LEN(DigitalStatNameMod);
+    DigitalStatNameMod = LEFT(DigitalStatNameMod,DigitalStatNameSpace-1) + "-" + RIGHT(DigitalStatNameMod,DigitalStatNameLength-DigitalStatNameSpace);
+	if(Debug)
+		TRACE("Digital Data Name Loop: %s", DigitalStatNameMod);
+	DigitalStatNameSpace = FIND("\x20", DigitalStatNameMod);
+	}
+	MakeString(Data$, "crestron_data,host=%s,name=%s value=0", DeviceHostname, DigitalStatNameMod);
+	if(Debug)
+		TRACE("Digital Data: %s", Data$);
+
+	sendStats(Data$);
+}
+
+
+
+CHANGE AnalogStat{
+
+STRING Data$[DataSize], AnalogStatNameMod[50];
+INTEGER AnalogStatNumber, AnalogStatNameSpace, AnalogStatNameLength;
+  if(AnalogPushDataOnChange){
+	    // get which array index was modified
+	    AnalogStatNumber = (GetLastModifiedArrayIndex());
+	    AnalogStatNameMod = AnalogStatName[AnalogStatNumber];
+   	  AnalogStatNameSpace = FIND("\x20", AnalogStatNameMod);
+
+      WHILE(AnalogStatNameSpace > 0)
+	    {
+	       AnalogStatNameLength = LEN(AnalogStatNameMod);
+         AnalogStatNameMod = LEFT(AnalogStatNameMod,AnalogStatNameSpace-1) + "-" + RIGHT(AnalogStatNameMod,AnalogStatNameLength-AnalogStatNameSpace);
+	       if(Debug)
+		        TRACE("Analog Data Name Loop: %s", AnalogStatNameMod);
+         AnalogStatNameSpace = FIND("\x20", AnalogStatNameMod);
+	    }
+	    MakeString(Data$, "crestron_data,host=%s,name=%s value=%u", DeviceHostname,AnalogStatNameMod, AnalogStat[AnalogStatNumber]);
+	    if(Debug)
+		       TRACE("Analog Data: %s", Data$);
+	    sendStats(Data$);
+  }
+}
+
+
+CHANGE SerialStat{
+
+	STRING Data$[DataSize], SerialStatNameMod[50];
+  	INTEGER SerialStatNumber, SerialStatNameSpace, SerialStatNameLength;
+
+	// get which array index was modified
+	SerialStatNumber = (GetLastModifiedArrayIndex());
+	SerialStatNameMod = SerialStatName[SerialStatNumber];
+   	SerialStatNameSpace = FIND("\x20", SerialStatNameMod);
+
+    WHILE(SerialStatNameSpace > 0)
+	{
+	SerialStatNameLength = LEN(SerialStatNameMod);
+    SerialStatNameMod = LEFT(SerialStatNameMod,SerialStatNameSpace-1) + "-" + RIGHT(SerialStatNameMod,SerialStatNameLength-SerialStatNameSpace);
+	if(Debug)
+		TRACE("Serial Data Name Loop: %s", SerialStatNameMod);
+	SerialStatNameSpace = FIND("\x20", SerialStatNameMod);
+	}
+	MakeString(Data$, "crestron_data,host=%s,name=%s text=\"%s\"", DeviceHostname, SerialStatNameMod, SerialStat[SerialStatNumber]);
+
+	if(Debug)
+		TRACE("Serial Data: %s", Data$);
+
+	sendStats(Data$);
+}
+
+
+socketConnect tcpClient
+{
+	STRING sURL[DataSizeServer];
+	SIGNED_INTEGER SendStatus;
+
+	ServerBusy = 1;
+
+	ServerDataLength = LEN(ServerData$);
+
+	MakeString(sURL, "POST /write?db=%s&u=%s&p=%s HTTP/1.1\nHost:%s\nUser-Agent:curl/7.43.0\nContent-Length:%u\nContent-Type:application/x-www-form-urlencoded\n\n%s\n\n", DBName, DBUser, DBPass, ServerName, ServerDataLength, ServerData$);
+
+	SendStatus = SocketSend(tcpClient, sURL);
+
+	Data$ = "";
+
+    if(Debug)
+		TRACE("Send Status: %d", SendStatus);
+		TRACE("Command Sent to Socket: %s", sURL);
+
+	//socketDisconnectClient(tcpClient);
+}
+
+//Socket Events
+SocketStatus tcpClient
+{
+	if(Debug)
+		TCPStatus(tcpClient.SocketStatus);
+}
+
+socketReceive tcpClient
+{
+	if(Debug)
+		TRACE("Receiving Commands from Socket");
+
+	if(Debug)
+		TRACE("Data from Socket: %s", tcpClient.SocketRxBuf);
+
+ 	CLEARBUFFER(tcpClient.SocketRxBuf);
+
+	socketDisconnectClient(tcpClient);
+
+	ServerBusy = 0;
+
+	if(ServerBusyNum > 0)
+	{
+ 	sendStats(ServerBusyData[ServerBusyNum]);
+	ServerBusyNum = ServerBusyNum - 1;
+	if(Debug)
+		TRACE("ServerBusyNum: %u", ServerBusyNum);
+	}
+}
+
+//Connect at startup
+Function Main()
+{
+	WaitForInitializationComplete();
+	if(Debug)
+		TRACE("Init Complete");
+	ServerBusy = 0;
+	ServerBusyNum = 0;
+
+}
